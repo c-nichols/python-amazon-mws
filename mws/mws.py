@@ -27,21 +27,8 @@ from time import strftime, gmtime
 from requests import request
 from requests.exceptions import HTTPError
 
-
-__all__ = [
-    'Feeds',
-    'Inventory',
-    'MWSError',
-    'Reports',
-    'Orders',
-    'Products',
-    'Recommendations',
-    'Sellers',
-]
-
 # See https://images-na.ssl-images-amazon.com/images/G/01/mwsportal/doc/en_US/bde/MWSDeveloperGuide._V357736853_.pdf page 8
 # for a list of the end points and marketplace IDs
-
 MARKETPLACES = {
     "CA": "https://mws.amazonservices.ca",  # A2EUQ1WTGCTBG2
     "US": "https://mws.amazonservices.com",  # ATVPDKIKX0DER
@@ -171,55 +158,8 @@ class MWS(object):
     def make_request(self, extra_data, method="GET", **kwargs):
         """Make request to Amazon MWS API with these parameters
         """
-
-        # Remove all keys with an empty value because
-        # Amazon's MWS does not allow such a thing.
-        extra_data = remove_empty(extra_data)
-
-        params = {
-            'AWSAccessKeyId': self.access_key,
-            self.ACCOUNT_TYPE: self.account_id,
-            'SignatureVersion': '2',
-            'Timestamp': self.get_timestamp(),
-            'Version': self.version,
-            'SignatureMethod': 'HmacSHA256',
-        }
-        if self.auth_token:
-            params['MWSAuthToken'] = self.auth_token
-        params.update(extra_data)
-        request_description = '&'.join(['%s=%s' % (k, quote(params[k], safe='-_.~')) for k in sorted(params)])
-        signature = self.calc_signature(method, request_description)
-        url = '%s%s?%s&Signature=%s' % (self.domain, self.uri, request_description, quote(signature))
-        headers = {'User-Agent': 'python-amazon-mws/0.0.1 (Language=Python)'}
-        headers.update(kwargs.get('extra_headers', {}))
-
-        try:
-            # Some might wonder as to why i don't pass the params dict as the params argument to request.
-            # My answer is, here i have to get the url parsed string of params in order to sign it, so
-            # if i pass the params dict as params to request, request will repeat that step because it will need
-            # to convert the dict to a url parsed string, so why do it twice if i can just pass the full url :).
-            response = request(method, url, data=kwargs.get('body', ''), headers=headers)
-            response.raise_for_status()
-            # When retrieving data from the response object,
-            # be aware that response.content returns the content in bytes while response.text calls
-            # response.content and converts it to unicode.
-            data = response.text
-
-            # I do not check the headers to decide which content structure to server simply because sometimes
-            # Amazon's MWS API returns XML error responses with "text/plain" as the Content-Type.
-            try:
-                parsed_response = DictWrapper(data, extra_data.get("Action") + "Result")
-            except XMLError:
-                parsed_response = DataWrapper(data, response.headers)
-
-        except HTTPError as e:
-            error = MWSError(str(e))
-            error.response = e.response
-            raise error
-
-        # Store the response object in the parsed_response for quick access
-        parsed_response.response = response
-        return parsed_response
+        url = self.form_url(extra_data, method)
+        return self.send_request(url, method, extra_data, **kwargs)
 
     def get_service_status(self):
         """
@@ -263,6 +203,62 @@ class MWS(object):
             for num, value in enumerate(values):
                 params['%s%d' % (param, (num + 1))] = value
         return params
+
+    def form_url(self, extra_data, method):
+        # Remove all keys with an empty value because
+        # Amazon's MWS does not allow such a thing.
+        extra_data = remove_empty(extra_data)
+
+        params = {
+            'AWSAccessKeyId': self.access_key,
+            self.ACCOUNT_TYPE: self.account_id,
+            'SignatureVersion': '2',
+            'Timestamp': self.get_timestamp(),
+            'Version': self.version,
+            'SignatureMethod': 'HmacSHA256',
+        }
+        if self.auth_token:
+            params['MWSAuthToken'] = self.auth_token
+        params.update(extra_data)
+        request_description = '&'.join(['%s=%s' % (k, quote(params[k], safe='-_.~')) for k in sorted(params)])
+        signature = self.calc_signature(method, request_description)
+        url = '%s%s?%s&Signature=%s' % (self.domain, self.uri, request_description, quote(signature))
+        return url
+
+    def send_request(self, url, method, extra_data, extra_headers=None, body=None):
+        extra_headers = extra_headers or {}
+        body = body or ''
+        headers = {'User-Agent': 'python-amazon-mws/0.0.1 (Language=Python)'}
+        headers.update(extra_headers)
+
+        try:
+            # Some might wonder as to why i don't pass the params dict as the params argument to request.
+            # My answer is, here i have to get the url parsed string of params in order to sign it, so
+            # if i pass the params dict as params to request, request will repeat that step because it will need
+            # to convert the dict to a url parsed string, so why do it twice if i can just pass the full url :).
+            response = request(method, url, data=body, headers=headers)
+            response.raise_for_status()
+            # When retrieving data from the response object,
+            # be aware that response.content returns the content in bytes while response.text calls
+            # response.content and converts it to unicode.
+            data = response.text
+
+            # I do not check the headers to decide which content structure to server simply because sometimes
+            # Amazon's MWS API returns XML error responses with "text/plain" as the Content-Type.
+            try:
+                parsed_response = DictWrapper(data, extra_data.get("Action") + "Result")
+            except XMLError:
+                parsed_response = DataWrapper(data, response.headers)
+
+        except HTTPError as e:
+            error = MWSError(str(e))
+            error.response = e.response
+            raise error
+
+        # Store the response object in the parsed_response for quick access
+        parsed_response.response = response
+        return parsed_response
+
 
 
 class Feeds(MWS):
